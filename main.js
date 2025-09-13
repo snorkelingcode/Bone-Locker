@@ -1120,33 +1120,53 @@ class ArmatureAnalyzer {
 
             console.log(`Fixing loop gap for ${boneInfo.boneName} (gap: ${boneInfo.gap.toFixed(4)})`);
 
-            // Calculate how many frames to blend at the end
-            const blendDuration = Math.min(0.5, track.times[track.times.length - 1] * 0.1); // 10% of animation or 0.5s max
-            const blendFrameCount = Math.ceil(blendDuration * 30); // Assume 30 FPS for frame calculation
+            // STEP 1: Make the last frame identical to the first frame
+            const lastFrameIndex = times.length - 1;
+            for (let j = 0; j < valueSize; j++) {
+                const firstValue = values[0 * valueSize + j]; // First frame value
+                values[lastFrameIndex * valueSize + j] = firstValue; // Copy to last frame
+            }
 
-            // Find frames within blend duration from the end
-            const lastTime = times[times.length - 1];
-            const blendStartTime = lastTime - blendDuration;
+            // STEP 2: Smooth interpolation in the blend zone leading up to the last frame
+            const animationDuration = times[lastFrameIndex];
+            const blendDuration = Math.min(0.5, animationDuration * 0.15); // 15% of animation or 0.5s max
+            const blendStartTime = animationDuration - blendDuration;
 
-            for (let i = times.length - 1; i >= 0; i--) {
-                if (times[i] < blendStartTime) break;
+            console.log(`  Blending last ${blendDuration.toFixed(2)}s of ${animationDuration.toFixed(2)}s animation`);
 
+            // Find all frames in the blend zone (excluding the last frame which we already set)
+            for (let i = times.length - 2; i >= 0; i--) { // Start from second-to-last frame
                 const frameTime = times[i];
-                const blendFactor = (lastTime - frameTime) / blendDuration; // 1.0 at start, 0.0 at end
 
-                // Interpolate between current values and start values
+                if (frameTime < blendStartTime) break; // Outside blend zone
+
+                // Calculate blend factor: 0.0 at blend start, 1.0 at end (approaching first frame values)
+                const blendFactor = (frameTime - blendStartTime) / blendDuration;
+
+                // Interpolate between original values and first frame values
                 for (let j = 0; j < valueSize; j++) {
-                    const currentValue = values[i * valueSize + j];
-                    const startValue = values[0 * valueSize + j]; // First frame
+                    const originalValue = values[i * valueSize + j];
+                    const targetValue = values[0 * valueSize + j]; // First frame value
 
-                    // Use spherical interpolation for quaternions, linear for positions
+                    // Use different interpolation for quaternions vs positions
                     let interpolatedValue;
                     if (track.name.includes('.quaternion')) {
-                        // Simple linear interpolation for quaternions (could be improved with slerp)
-                        interpolatedValue = currentValue * (1 - blendFactor) + startValue * blendFactor;
+                        // For quaternions, ensure we take the shortest path (handle double cover)
+                        let diff = targetValue - originalValue;
+
+                        // Handle quaternion double cover - choose shorter path
+                        if (Math.abs(diff) > 1.0) {
+                            if (diff > 0) {
+                                diff = diff - 2.0;
+                            } else {
+                                diff = diff + 2.0;
+                            }
+                        }
+
+                        interpolatedValue = originalValue + (diff * blendFactor);
                     } else {
                         // Linear interpolation for positions
-                        interpolatedValue = currentValue * (1 - blendFactor) + startValue * blendFactor;
+                        interpolatedValue = originalValue + (targetValue - originalValue) * blendFactor;
                     }
 
                     values[i * valueSize + j] = interpolatedValue;
