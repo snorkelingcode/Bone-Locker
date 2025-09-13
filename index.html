@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Armature Identifier</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            background: #1a1a1a;
+            color: #fff;
+            overflow: hidden;
+        }
+
+        #container {
+            display: flex;
+            height: 100vh;
+        }
+
+        #viewer {
+            flex: 1;
+            position: relative;
+        }
+
+        #sidebar {
+            width: 400px;
+            background: #2a2a2a;
+            padding: 20px;
+            overflow-y: auto;
+            border-left: 1px solid #444;
+        }
+
+        #fileInput {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 20px;
+            background: #333;
+            border: 1px solid #555;
+            color: #fff;
+            border-radius: 4px;
+        }
+
+        #controls {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #333;
+            border-radius: 4px;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            margin-bottom: 5px;
+        }
+
+        button {
+            padding: 8px 15px;
+            margin: 5px;
+            background: #0066cc;
+            border: none;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #0052a3;
+        }
+
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+
+        #boneList {
+            max-height: 400px;
+            overflow-y: auto;
+            background: #333;
+            border-radius: 4px;
+            padding: 10px;
+        }
+
+        .bone-item {
+            padding: 8px;
+            margin: 2px 0;
+            background: #444;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+
+        .bone-name {
+            font-weight: bold;
+            color: #66ccff;
+        }
+
+        .bone-transform {
+            margin-top: 5px;
+            font-family: monospace;
+            font-size: 10px;
+            color: #ccc;
+        }
+
+        #exportSection {
+            margin-top: 20px;
+            padding: 15px;
+            background: #333;
+            border-radius: 4px;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 8px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="viewer">
+            <div id="loading">Loading...</div>
+        </div>
+        <div id="sidebar">
+            <input type="file" id="fileInput" accept=".fbx" />
+
+            <div id="controls">
+                <h3>Animation Controls</h3>
+                <div class="control-group">
+                    <label for="timeSlider">Time:</label>
+                    <input type="range" id="timeSlider" min="0" max="100" value="0" disabled />
+                    <span id="timeDisplay">0.00s</span>
+                </div>
+                <div class="control-group">
+                    <button id="playBtn" disabled>Play</button>
+                    <button id="pauseBtn" disabled>Pause</button>
+                    <button id="resetBtn" disabled>Reset</button>
+                </div>
+                <div class="control-group">
+                    <label for="speedSlider">Speed:</label>
+                    <input type="range" id="speedSlider" min="0.1" max="3" step="0.1" value="1" />
+                    <span id="speedDisplay">1.0x</span>
+                </div>
+            </div>
+
+            <div id="cleanupSection">
+                <h3>Mocap Cleanup</h3>
+                <div class="control-group">
+                    <label for="smoothingStrength">Smoothing Strength:</label>
+                    <select id="smoothingStrength">
+                        <option value="light">Light (Preserve Detail)</option>
+                        <option value="medium" selected>Medium (Balanced)</option>
+                        <option value="heavy">Heavy (Strong Smoothing)</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label>
+                        <input type="checkbox" id="handsOnly" checked />
+                        Focus on Hands/Wrists/Fingers Only
+                    </label>
+                </div>
+                <button id="cleanupBtn" disabled>Clean Up Mocap Animation</button>
+                <button id="makeLoopBtn" disabled>Make Animation Loop</button>
+                <button id="resetOriginalBtn" disabled>Reset to Original</button>
+                <div id="cleanupStatus" style="margin-top: 10px; font-size: 12px; color: #66ccff;"></div>
+            </div>
+
+
+            <div>
+                <h3>Bones (<span id="boneCount">0</span>)</h3>
+                <div id="boneList"></div>
+            </div>
+        </div>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.157.0/build/three.module.js",
+            "three/examples/jsm/loaders/FBXLoader": "https://cdn.jsdelivr.net/npm/three@0.157.0/examples/jsm/loaders/FBXLoader.js",
+            "three/examples/jsm/controls/OrbitControls": "https://cdn.jsdelivr.net/npm/three@0.157.0/examples/jsm/controls/OrbitControls.js"
+        }
+    }
+    </script>
+    <script type="module" src="main.js"></script>
+</body>
+</html>
