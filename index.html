@@ -199,7 +199,8 @@
                     </div>
                 </div>
                 <button id="setBoneLockBtn" disabled>Set Bone Smooth</button>
-                <button id="exportBtn" disabled>Export Cleaned Animation (FBX)</button>
+                <button id="exportBtn" disabled>Export Cleaned Animation (GLB→FBX)</button>
+                <button id="exportJsonBtn" disabled>Export JSON for AI Training</button>
                 <div id="cleanupStatus" style="margin-top: 10px; font-size: 12px; color: #66ccff;"></div>
             </div>
 
@@ -216,10 +217,11 @@
         "imports": {
             "three": "https://cdn.jsdelivr.net/npm/three@0.157.0/build/three.module.js",
             "three/examples/jsm/loaders/FBXLoader": "https://cdn.jsdelivr.net/npm/three@0.157.0/examples/jsm/loaders/FBXLoader.js",
+            "three/examples/jsm/exporters/GLTFExporter.js": "https://cdn.jsdelivr.net/npm/three@0.157.0/examples/jsm/exporters/GLTFExporter.js",
             "three/examples/jsm/controls/OrbitControls": "https://cdn.jsdelivr.net/npm/three@0.157.0/examples/jsm/controls/OrbitControls.js"
         }
     }
     </script>
-    <script type="module" src="main.js"></script>
+    <script type="module" src="main.js?v=2"></script>
 </body>
 </html>

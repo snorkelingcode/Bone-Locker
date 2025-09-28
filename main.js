@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader';
+import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 
 class ArmatureAnalyzer {
@@ -68,6 +69,7 @@ class ArmatureAnalyzer {
         const timeSlider = document.getElementById('timeSlider');
         const speedSlider = document.getElementById('speedSlider');
         const exportBtn = document.getElementById('exportBtn');
+        const exportJsonBtn = document.getElementById('exportJsonBtn');
         const addSmoothRuleBtn = document.getElementById('addSmoothRule');
         const setBoneLockBtn = document.getElementById('setBoneLockBtn');
 
@@ -78,6 +80,7 @@ class ArmatureAnalyzer {
         timeSlider.addEventListener('input', (e) => this.seekAnimation(parseFloat(e.target.value)));
         speedSlider.addEventListener('input', (e) => this.setAnimationSpeed(parseFloat(e.target.value)));
         exportBtn.addEventListener('click', () => this.exportCleanedAnimation());
+        exportJsonBtn.addEventListener('click', () => this.exportJsonForAI());
         addSmoothRuleBtn.addEventListener('click', () => this.addSmoothRule());
         setBoneLockBtn.addEventListener('click', () => this.setBoneLock());
     }
@@ -197,6 +200,7 @@ class ArmatureAnalyzer {
             document.getElementById('pauseBtn').disabled = false;
             document.getElementById('resetBtn').disabled = false;
             document.getElementById('exportBtn').disabled = false;
+            document.getElementById('exportJsonBtn').disabled = false;
             document.getElementById('setBoneLockBtn').disabled = false;
 
 
@@ -1331,30 +1335,133 @@ class ArmatureAnalyzer {
 
 
     exportCleanedAnimation() {
+        console.log('🔧 NEW exportCleanedAnimation method called - NOT JSON export!');
+
+        if (!this.animationClip || !this.bones.length || !this.loadedModel) {
+            alert('No animation data to export');
+            return;
+        }
+
+        // Show user that FBX isn't available but offer GLB alternative
+        const userChoice = confirm(
+            'FBX export is not available in browser environments.\n\n' +
+            'THREE.js does not include an FBXExporter.\n\n' +
+            'Would you like to export as GLB instead?\n' +
+            '(GLB files can be imported into Blender, Maya, and other 3D software, then converted to FBX)'
+        );
+
+        if (!userChoice) {
+            document.getElementById('cleanupStatus').textContent = 'Export cancelled by user.';
+            return;
+        }
+
+        console.log('📦 Exporting cleaned animation as GLB...');
+        const status = document.getElementById('cleanupStatus');
+        status.textContent = 'Preparing GLB export...';
+
+        try {
+            // Use GLTFExporter to export the updated model with animation
+            const exporter = new GLTFExporter();
+
+            // Create a scene with just our model for export
+            const exportScene = new THREE.Scene();
+
+            // Clone the model to avoid modifying the original
+            const modelClone = this.loadedModel.clone(true); // Deep clone including geometry/materials
+
+            // Ensure the cloned model has the current animation state and include animation
+            if (this.mixer && this.animationClip) {
+                // Add the animation clip to the cloned model
+                if (!modelClone.animations) {
+                    modelClone.animations = [];
+                }
+
+                // Clone the animation clip and add it
+                const clonedClip = this.animationClip.clone();
+                modelClone.animations.push(clonedClip);
+
+                // Create new mixer for the cloned model to apply current pose
+                const clonedMixer = new THREE.AnimationMixer(modelClone);
+                const clonedAction = clonedMixer.clipAction(clonedClip);
+
+                // Set to current time and update once to apply the pose
+                clonedAction.time = this.action ? this.action.time : 0;
+                clonedAction.enabled = true;
+                clonedMixer.update(0);
+            }
+
+            // Add the model to export scene
+            exportScene.add(modelClone);
+
+            // Export with animation
+            const exportOptions = {
+                binary: true,
+                animations: modelClone.animations || [this.animationClip]
+            };
+
+            exporter.parse(
+                exportScene,
+                (gltfData) => {
+                    // Success callback
+                    const blob = new Blob([gltfData], { type: 'application/octet-stream' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'cleaned_animation.glb';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+
+                    status.textContent = '✅ GLB exported successfully! Import into Blender and save as FBX.';
+                    console.log('📦 GLB export complete! File downloaded with updated animation data.');
+
+                    alert(
+                        'GLB file exported successfully!\n\n' +
+                        'To convert to FBX:\n' +
+                        '1. Import the .glb file into Blender\n' +
+                        '2. File > Export > FBX (.fbx)\n' +
+                        '3. Make sure "Animation" is checked in export options'
+                    );
+                },
+                (error) => {
+                    // Error callback
+                    console.error('GLB Export error:', error);
+                    status.textContent = `❌ GLB export failed: ${error.message}`;
+                    alert(`GLB export failed: ${error.message}`);
+                },
+                exportOptions
+            );
+
+        } catch (error) {
+            console.error('Export error:', error);
+            status.textContent = `❌ Export failed: ${error.message}`;
+            alert(`Export failed: ${error.message}`);
+        }
+    }
+
+    exportJsonForAI() {
         if (!this.animationClip || !this.bones.length) {
             alert('No animation data to export');
             return;
         }
 
-        console.log('📦 Exporting cleaned animation...');
+        console.log('📦 Exporting JSON for AI training...');
         const status = document.getElementById('cleanupStatus');
-        status.textContent = 'Preparing export...';
+        status.textContent = 'Preparing JSON export for AI training...';
 
-        // We need to use the FBXExporter, but since it's not easily available in browser,
-        // we'll export the animation data in a format that can be imported back into Blender/Maya
-
-        // Create export data with current (cleaned/looped) animation state
+        // Create export data optimized for AI training
         const exportData = {
             metadata: {
-                name: 'Cleaned Animation Export',
+                name: 'AI Training Animation Data',
                 originalFile: this.loadedModel.name || 'Unknown',
                 duration: this.animationClip.duration,
                 frameRate: 30,
                 boneCount: this.bones.length,
                 exportDate: new Date().toISOString(),
                 modifications: [
-                    'Processed animation',
-                    'Ready for import into 3D software'
+                    'Processed for AI training',
+                    'Contains bone hierarchy and animation tracks'
                 ]
             },
             bones: this.bones.map((bone, index) => ({
@@ -1375,13 +1482,11 @@ class ArmatureAnalyzer {
             }
         };
 
-        // Export as JSON (can be imported into Blender with custom script)
-        this.downloadJSON(exportData, 'cleaned_animation.json');
+        // Export as JSON for AI training
+        this.downloadJSON(exportData, 'animation_training_data.json');
 
-        status.textContent = '✅ Animation exported as JSON! Import into Blender/Maya with custom script.';
-
-        console.log('📦 Export complete! File contains cleaned animation data.');
-        console.log('💡 Use this JSON with a custom importer script in your 3D software.');
+        status.textContent = '✅ JSON exported for AI training! Contains animation data and bone hierarchy.';
+        console.log('📦 JSON export complete! File optimized for AI training purposes.');
     }
 
     downloadJSON(data, filename) {
@@ -1543,6 +1648,7 @@ class ArmatureAnalyzer {
         document.getElementById('resetBtn').disabled = true;
         document.getElementById('timeSlider').disabled = true;
         document.getElementById('exportBtn').disabled = true;
+        document.getElementById('exportJsonBtn').disabled = true;
         document.getElementById('setBoneLockBtn').disabled = true;
     }
 
@@ -1736,52 +1842,88 @@ class ArmatureAnalyzer {
         }
 
         // Regular smoothing for light/medium/heavy intensities
-        for (let i = actualStartIndex + 1; i < actualEndIndex - 1; i++) {
-            const prevValueIndex = (i - 1) * valueSize;
-            const currValueIndex = i * valueSize;
-            const nextValueIndex = (i + 1) * valueSize;
-
-            let hasLargeChange = false;
-
-            // For heavy smoothing, reduce detection threshold to catch smaller changes
-            const detectionThreshold = intensity === 'heavy' ? params.detectionThreshold * 0.5 : params.detectionThreshold;
-
-            // Check for large changes on any axis
+        if (intensity === 'heavy') {
+            // HEAVY: Apply very strong smoothing to almost lock the bone
+            const firstValueIndex = actualStartIndex * valueSize;
+            const firstValues = [];
             for (let j = 0; j < valueSize; j++) {
-                const prevVal = values[prevValueIndex + j];
-                const currVal = values[currValueIndex + j];
-                const nextVal = values[nextValueIndex + j];
-
-                // Calculate differences
-                const diff1 = Math.abs(currVal - prevVal);
-                const diff2 = Math.abs(nextVal - currVal);
-
-                // Detect jitter/spikes
-                if (diff1 > detectionThreshold || diff2 > detectionThreshold) {
-                    hasLargeChange = true;
-                    break;
-                }
+                firstValues[j] = values[firstValueIndex + j];
             }
 
-            // For medium and heavy, also apply smoothing even without large changes
-            const forceSmooth = intensity === 'heavy' || (intensity === 'medium' && Math.random() < 0.3);
+            // Set most keyframes to the first value, with slight variation
+            for (let i = actualStartIndex; i < actualEndIndex; i++) {
+                const currValueIndex = i * valueSize;
+                for (let j = 0; j < valueSize; j++) {
+                    const originalValue = values[currValueIndex + j];
+                    // 95% towards first value, 5% original (barely moves)
+                    values[currValueIndex + j] = firstValues[j] * 0.95 + originalValue * 0.05;
+                }
+                issuesFixed++;
+            }
+        } else if (intensity === 'medium') {
+            // MEDIUM: Apply strong smoothing - significantly reduce movement
+            const firstValueIndex = actualStartIndex * valueSize;
+            const firstValues = [];
+            for (let j = 0; j < valueSize; j++) {
+                firstValues[j] = values[firstValueIndex + j];
+            }
 
-            // If large change detected or force smoothing, apply smoothing
-            if (hasLargeChange || forceSmooth) {
+            // Set most keyframes towards first value, with more variation than heavy
+            for (let i = actualStartIndex; i < actualEndIndex; i++) {
+                const currValueIndex = i * valueSize;
+                for (let j = 0; j < valueSize; j++) {
+                    const originalValue = values[currValueIndex + j];
+                    // 80% towards first value, 20% original (significantly reduced movement)
+                    values[currValueIndex + j] = firstValues[j] * 0.8 + originalValue * 0.2;
+                }
+                issuesFixed++;
+            }
+        } else {
+            // Light: Apply regular smoothing
+            for (let i = actualStartIndex + 1; i < actualEndIndex - 1; i++) {
+                const prevValueIndex = (i - 1) * valueSize;
+                const currValueIndex = i * valueSize;
+                const nextValueIndex = (i + 1) * valueSize;
+
+                let hasLargeChange = false;
+
+                // Check for large changes on any axis
                 for (let j = 0; j < valueSize; j++) {
                     const prevVal = values[prevValueIndex + j];
                     const currVal = values[currValueIndex + j];
                     const nextVal = values[nextValueIndex + j];
 
-                    // Apply smoothing with the specified strength
-                    const smoothedValue = prevVal * 0.25 + currVal * 0.5 + nextVal * 0.25;
-                    const originalValue = values[currValueIndex + j];
+                    // Calculate differences
+                    const diff1 = Math.abs(currVal - prevVal);
+                    const diff2 = Math.abs(nextVal - currVal);
 
-                    // Blend between original and smoothed based on strength
-                    values[currValueIndex + j] = originalValue * (1 - params.smoothingStrength) +
-                                                smoothedValue * params.smoothingStrength;
+                    // Detect jitter/spikes
+                    if (diff1 > params.detectionThreshold || diff2 > params.detectionThreshold) {
+                        hasLargeChange = true;
+                        break;
+                    }
                 }
-                issuesFixed++;
+
+                // For medium, also apply smoothing more frequently
+                const forceSmooth = intensity === 'medium' && Math.random() < 0.5;
+
+                // If large change detected or force smoothing, apply smoothing
+                if (hasLargeChange || forceSmooth) {
+                    for (let j = 0; j < valueSize; j++) {
+                        const prevVal = values[prevValueIndex + j];
+                        const currVal = values[currValueIndex + j];
+                        const nextVal = values[nextValueIndex + j];
+
+                        // Apply smoothing with the specified strength
+                        const smoothedValue = prevVal * 0.25 + currVal * 0.5 + nextVal * 0.25;
+                        const originalValue = values[currValueIndex + j];
+
+                        // Blend between original and smoothed based on strength
+                        values[currValueIndex + j] = originalValue * (1 - params.smoothingStrength) +
+                                                    smoothedValue * params.smoothingStrength;
+                    }
+                    issuesFixed++;
+                }
             }
         }
 
