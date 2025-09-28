@@ -19,7 +19,7 @@ class ArmatureAnalyzer {
         this.frameData = [];
         this.loadedModel = null;
         this.boundsHelper = null;
-        this.originalAnimation = null; // Store original animation data for reset
+        this.smoothRules = []; // Track selective smoothing rules
 
         this.init();
         this.setupEventListeners();
@@ -67,9 +67,9 @@ class ArmatureAnalyzer {
         const resetBtn = document.getElementById('resetBtn');
         const timeSlider = document.getElementById('timeSlider');
         const speedSlider = document.getElementById('speedSlider');
-        const cleanupBtn = document.getElementById('cleanupBtn');
-        const makeLoopBtn = document.getElementById('makeLoopBtn');
-        const resetOriginalBtn = document.getElementById('resetOriginalBtn');
+        const exportBtn = document.getElementById('exportBtn');
+        const addSmoothRuleBtn = document.getElementById('addSmoothRule');
+        const setBoneLockBtn = document.getElementById('setBoneLockBtn');
 
         fileInput.addEventListener('change', (e) => this.loadFBX(e.target.files[0]));
         playBtn.addEventListener('click', () => this.playAnimation());
@@ -77,9 +77,9 @@ class ArmatureAnalyzer {
         resetBtn.addEventListener('click', () => this.resetAnimation());
         timeSlider.addEventListener('input', (e) => this.seekAnimation(parseFloat(e.target.value)));
         speedSlider.addEventListener('input', (e) => this.setAnimationSpeed(parseFloat(e.target.value)));
-        cleanupBtn.addEventListener('click', () => this.cleanupMocapAnimation());
-        makeLoopBtn.addEventListener('click', () => this.makeAnimationLoop());
-        resetOriginalBtn.addEventListener('click', () => this.resetToOriginal());
+        exportBtn.addEventListener('click', () => this.exportCleanedAnimation());
+        addSmoothRuleBtn.addEventListener('click', () => this.addSmoothRule());
+        setBoneLockBtn.addEventListener('click', () => this.setBoneLock());
     }
 
     async loadFBX(file) {
@@ -108,8 +108,7 @@ class ArmatureAnalyzer {
 
 
             // Rotate the model 90 degrees on X-axis to make character stand upright
-            // Try negative rotation first (character lying face down)
-            fbx.rotation.x = -Math.PI / 2; // -90 degrees in radians
+            fbx.rotation.x = -Math.PI / 2;
 
             // Scale down the model if it's too large
             this.normalizeModelSize(fbx);
@@ -197,14 +196,16 @@ class ArmatureAnalyzer {
             document.getElementById('playBtn').disabled = false;
             document.getElementById('pauseBtn').disabled = false;
             document.getElementById('resetBtn').disabled = false;
-            document.getElementById('cleanupBtn').disabled = false;
-            document.getElementById('makeLoopBtn').disabled = false;
+            document.getElementById('exportBtn').disabled = false;
+            document.getElementById('setBoneLockBtn').disabled = false;
+
 
             console.log('Animation duration:', this.animationClip.duration);
             console.log('Animation tracks:', this.animationClip.tracks.length);
         }
 
         this.updateBonesList();
+        this.populateSmoothBoneDropdown();
         console.log(`Final bone count: ${this.bones.length}`);
 
         // Log the entire FBX structure for debugging
@@ -832,6 +833,7 @@ class ArmatureAnalyzer {
 
     playAnimation() {
         if (this.action) {
+
             this.action.play();
             this.isPlaying = true;
         }
@@ -870,6 +872,37 @@ class ArmatureAnalyzer {
         }
         document.getElementById('speedDisplay').textContent = `${speed.toFixed(1)}x`;
     }
+
+    setBoneLock() {
+        if (!this.animationClip || !this.bones.length) {
+            alert('No animation data to apply bone locks');
+            return;
+        }
+
+        if (this.smoothRules.length === 0) {
+            alert('No control rules defined. Please add some rules first.');
+            return;
+        }
+
+        console.log('🔒 Applying bone locks...');
+        const status = document.getElementById('cleanupStatus');
+        status.textContent = 'Applying bone locks...';
+
+        // Apply selective smoothing rules
+        const totalSmoothingApplied = this.applySelectiveSmoothing();
+
+        // Update status
+        status.textContent = `✅ Bone locks applied! Applied ${totalSmoothingApplied} smoothing operations across ${this.smoothRules.length} control rules.`;
+
+        console.log(`🎉 Bone locks complete! Applied ${totalSmoothingApplied} operations.`);
+
+        // Refresh the animation to show changes
+        if (this.action) {
+            this.action.time = this.action.time; // Force refresh
+            this.mixer.update(0);
+        }
+    }
+
 
     captureFrameData() {
         if (!this.bones.length || !this.action) return;
@@ -926,278 +959,471 @@ class ArmatureAnalyzer {
         });
     }
 
-    cleanupMocapAnimation() {
-        if (!this.animationClip || !this.bones.length) {
-            alert('No animation data to clean up');
-            return;
+    getFingerBoneType(boneName) {
+        const name = boneName.toLowerCase();
+
+        // Check if it's a metacarpal
+        if (name.includes('metacarp') || name.includes('meta')) {
+            return 'metacarpal';
         }
 
-        console.log('🧹 Starting mocap cleanup...');
-        const status = document.getElementById('cleanupStatus');
-        status.textContent = 'Analyzing animation...';
+        // Check for finger bone segments by common patterns
+        // Common patterns: finger1, finger2, finger3, thumb1, thumb2, etc.
+        // Or: index_01, index_02, middle_01, etc.
+        // Or: proximal, middle, distal
 
-        // Store original animation if not already stored
-        if (!this.originalAnimation) {
-            this.storeOriginalAnimation();
+        const segmentPatterns = [
+            // Numbered segments
+            { pattern: /[._]?0?1$|[._]?01$|[._]?proximal/i, type: 'proximal' },
+            { pattern: /[._]?0?2$|[._]?02$|[._]?middle/i, type: 'middle' },
+            { pattern: /[._]?0?3$|[._]?03$|[._]?distal|[._]?tip/i, type: 'distal' },
+            // Alternative patterns
+            { pattern: /[._]?a$|[._]first/i, type: 'proximal' },
+            { pattern: /[._]?b$|[._]second/i, type: 'middle' },
+            { pattern: /[._]?c$|[._]third/i, type: 'distal' }
+        ];
+
+        for (const seg of segmentPatterns) {
+            if (seg.pattern.test(name)) {
+                return seg.type;
+            }
         }
 
-        const handsOnly = document.getElementById('handsOnly').checked;
-        const strength = document.getElementById('smoothingStrength').value;
-
-        const bonesToClean = handsOnly ? this.getHandWristFingerBones() : this.bones;
-
-        console.log(`Found ${bonesToClean.length} bones to clean up`);
-        status.textContent = `Cleaning ${bonesToClean.length} bones...`;
-
-        // Get smoothing parameters based on strength
-        const smoothingParams = this.getSmoothingParams(strength);
-
-        // Analyze and clean the animation
-        let totalIssuesFixed = 0;
-
-        bonesToClean.forEach((bone, index) => {
-            const issuesFixed = this.smoothBoneAnimation(bone, smoothingParams);
-            totalIssuesFixed += issuesFixed;
-
-            // Update progress
-            const progress = ((index + 1) / bonesToClean.length * 100).toFixed(0);
-            status.textContent = `Processing: ${progress}% (${totalIssuesFixed} issues fixed)`;
-        });
-
-        // Enable reset button and update status
-        document.getElementById('resetOriginalBtn').disabled = false;
-        status.textContent = `✅ Cleanup complete! Fixed ${totalIssuesFixed} issues in ${bonesToClean.length} bones.`;
-
-        console.log(`🎉 Mocap cleanup complete! Fixed ${totalIssuesFixed} issues.`);
-
-        // Refresh the animation to show changes
-        if (this.action) {
-            this.action.time = this.action.time; // Force refresh
-            this.mixer.update(0);
+        // If no specific segment found but contains finger/thumb keywords, assume proximal
+        if (name.includes('finger') || name.includes('thumb') ||
+            name.includes('index') || name.includes('middle') ||
+            name.includes('ring') || name.includes('pinky')) {
+            return 'proximal'; // Default to proximal if unsure
         }
+
+        return 'unknown';
     }
 
-    storeOriginalAnimation() {
-        console.log('💾 Storing original animation data...');
-        this.originalAnimation = {
-            tracks: this.animationClip.tracks.map(track => ({
-                name: track.name,
-                times: [...track.times],
-                values: [...track.values]
-            }))
+    getConservativeHumanoidConstraints(boneName) {
+        const name = boneName.toLowerCase();
+
+
+        // EXTREMELY PERMISSIVE CONSTRAINTS for everything else - Only prevent the absolute worst cases
+
+        // FINGERS - Only prevent severe backward hyperextension
+        if (name.match(/(thumb|index|middle|ring|pinky)_0[1-3]_[lr]/)) {
+            return {
+                x: { min: -Math.PI/3, max: Math.PI*7/4 },   // -60° to +315° - extremely permissive
+                y: { min: -Math.PI, max: Math.PI },         // ±180° - essentially unlimited
+                z: { min: -Math.PI, max: Math.PI }          // ±180° - essentially unlimited
+            };
+        }
+
+        // ELBOWS/KNEES - Only prevent extreme hyperextension
+        if (name.match(/^lowerarm_[lr]$/) || name.match(/^calf_[lr]$/)) {
+            return {
+                x: { min: -Math.PI/2, max: Math.PI*7/4 },   // -90° to +315° - extremely permissive
+                y: { min: -Math.PI, max: Math.PI },         // ±180° - unlimited
+                z: { min: -Math.PI, max: Math.PI }          // ±180° - unlimited
+            };
+        }
+
+        // EVERYTHING ELSE - Almost no constraints, just prevent full 360° impossible rotations
+        return {
+            x: { min: -Math.PI*7/8, max: Math.PI*7/8 },     // ±157.5° - extremely generous
+            y: { min: -Math.PI*7/8, max: Math.PI*7/8 },     // ±157.5° - extremely generous
+            z: { min: -Math.PI*7/8, max: Math.PI*7/8 }      // ±157.5° - extremely generous
         };
     }
 
-    resetToOriginal() {
-        if (!this.originalAnimation) {
-            alert('No original animation data to restore');
-            return;
+    getFingerConstraints(boneType) {
+        // Legacy method - redirect to UE5 constraints
+        return this.getUE5HumanoidConstraints('finger_01'); // Default finger constraint
+    }
+
+    getFingerBonesOnly() {
+        // Filter to only actual finger bones (exclude arms, wrists, etc.)
+        const fingerOnlyPatterns = [
+            // Fingers and thumbs only
+            /finger/i, /thumb/i, /index/i, /middle/i, /ring/i, /pinky/i,
+            // Metacarpals
+            /metacarp/i, /meta/i,
+            // Common finger naming patterns
+            /\.(finger|thumb)/i,
+            /_finger/i, /_thumb/i,
+            /finger\./i, /thumb\./i
+        ];
+
+        // Exclude arm/wrist bones specifically
+        const excludePatterns = [
+            /arm/i, /forearm/i, /elbow/i, /shoulder/i
+        ];
+
+        return this.bones.filter(bone => {
+            const name = bone.name.toLowerCase();
+
+            // Must match finger patterns
+            const matchesFingerPattern = fingerOnlyPatterns.some(pattern => pattern.test(name));
+
+            // Must not match exclude patterns
+            const matchesExcludePattern = excludePatterns.some(pattern => pattern.test(name));
+
+            return matchesFingerPattern && !matchesExcludePattern;
+        });
+    }
+
+    getWristHandBones() {
+        // Filter to only wrist and hand bones
+        const wristHandPatterns = [
+            /wrist/i, /hand$/i, /hand\./i, /_hand$/i
+        ];
+
+        // Exclude finger bones and arms
+        const excludePatterns = [
+            /finger/i, /thumb/i, /index/i, /middle/i, /ring/i, /pinky/i,
+            /metacarp/i, /meta/i, /arm/i, /forearm/i, /elbow/i, /shoulder/i
+        ];
+
+        return this.bones.filter(bone => {
+            const name = bone.name.toLowerCase();
+
+            // Must match wrist/hand patterns
+            const matchesWristHandPattern = wristHandPatterns.some(pattern => pattern.test(name));
+
+            // Must not match exclude patterns
+            const matchesExcludePattern = excludePatterns.some(pattern => pattern.test(name));
+
+            return matchesWristHandPattern && !matchesExcludePattern;
+        });
+    }
+
+    getIKHandBones() {
+        // Filter to only IK hand bones
+        const ikHandPatterns = [
+            /ik.*hand/i, /hand.*ik/i, /ik_hand/i, /hand_ik/i,
+            /ikhand/i, /handik/i, /_ik.*hand/i, /_hand.*ik/i
+        ];
+
+        // Exclude finger bones and arms
+        const excludePatterns = [
+            /finger/i, /thumb/i, /index/i, /middle/i, /ring/i, /pinky/i,
+            /metacarp/i, /meta/i, /arm/i, /forearm/i, /elbow/i, /shoulder/i
+        ];
+
+        return this.bones.filter(bone => {
+            const name = bone.name.toLowerCase();
+
+            // Must match IK hand patterns
+            const matchesIKHandPattern = ikHandPatterns.some(pattern => pattern.test(name));
+
+            // Must not match exclude patterns
+            const matchesExcludePattern = excludePatterns.some(pattern => pattern.test(name));
+
+            return matchesIKHandPattern && !matchesExcludePattern;
+        });
+    }
+
+    constrainWristHandRotations() {
+        if (!this.animationClip) {
+            console.log('No animation clip to constrain');
+            return 0;
         }
 
-        console.log('🔄 Restoring original animation...');
-        const status = document.getElementById('cleanupStatus');
-        status.textContent = 'Restoring original animation...';
+        let constraintsApplied = 0;
+        const wristHandBones = this.getWristHandBones();
 
-        // Restore original track data
-        this.animationClip.tracks.forEach(track => {
-            const originalTrack = this.originalAnimation.tracks.find(t => t.name === track.name);
-            if (originalTrack) {
-                track.times = [...originalTrack.times];
-                track.values = [...originalTrack.values];
+        console.log(`🤲 Applying wrist/hand constraints to ${wristHandBones.length} wrist/hand bones...`);
+
+        // Wrist and hand constraints - 10 degrees on all axes
+        const wristHandConstraints = {
+            x: { min: -Math.PI/18, max: Math.PI/18 }, // ±10 degrees
+            y: { min: -Math.PI/18, max: Math.PI/18 }, // ±10 degrees
+            z: { min: -Math.PI/18, max: Math.PI/18 }  // ±10 degrees
+        };
+
+        wristHandBones.forEach(bone => {
+            console.log(`Constraining wrist/hand: ${bone.name}`);
+
+            // Find rotation track for this bone
+            const rotationTrackName = bone.name + '.quaternion';
+            const rotTrack = this.animationClip.tracks.find(track => track.name === rotationTrackName);
+
+            if (rotTrack) {
+                const constraintsFixed = this.applyRotationConstraints(rotTrack, wristHandConstraints);
+                constraintsApplied += constraintsFixed;
+                console.log(`  Applied ${constraintsFixed} wrist/hand constraints to ${bone.name}`);
             }
         });
 
-        // Refresh the animation
-        if (this.action) {
-            this.action.time = this.action.time; // Force refresh
-            this.mixer.update(0);
-        }
-
-        status.textContent = '✅ Original animation restored.';
-        console.log('🎉 Original animation restored!');
+        console.log(`🤲 Total wrist/hand constraints applied: ${constraintsApplied}`);
+        return constraintsApplied;
     }
 
-    makeAnimationLoop() {
+    constrainIKHandRotations() {
+        if (!this.animationClip) {
+            console.log('No animation clip to constrain');
+            return 0;
+        }
+
+        let constraintsApplied = 0;
+        const ikHandBones = this.getIKHandBones();
+
+        console.log(`🎯 Applying IK hand constraints to ${ikHandBones.length} IK hand bones...`);
+
+        // IK hand constraints - no negative rotations, limited positive rotations
+        const ikHandConstraints = {
+            x: { min: 0, max: Math.PI/18 }, // 0 to +10 degrees (no negative)
+            y: { min: 0, max: Math.PI/18 }, // 0 to +10 degrees (no negative)
+            z: { min: 0, max: Math.PI/18 }  // 0 to +10 degrees (no negative)
+        };
+
+        ikHandBones.forEach(bone => {
+            console.log(`Constraining IK hand: ${bone.name}`);
+
+            // Find rotation track for this bone
+            const rotationTrackName = bone.name + '.quaternion';
+            const rotTrack = this.animationClip.tracks.find(track => track.name === rotationTrackName);
+
+            if (rotTrack) {
+                const constraintsFixed = this.applyRotationConstraints(rotTrack, ikHandConstraints);
+                constraintsApplied += constraintsFixed;
+                console.log(`  Applied ${constraintsFixed} IK hand constraints to ${bone.name}`);
+            }
+        });
+
+        console.log(`🎯 Total IK hand constraints applied: ${constraintsApplied}`);
+        return constraintsApplied;
+    }
+
+    constrainUE5HumanoidRotations() {
+        if (!this.animationClip) {
+            console.log('No animation clip to constrain');
+            return 0;
+        }
+
+        let constraintsApplied = 0;
+        console.log(`🤖 Applying conservative humanoid constraints to ${this.bones.length} bones...`);
+
+        this.bones.forEach(bone => {
+            const constraints = this.getConservativeHumanoidConstraints(bone.name);
+
+            // Find rotation track for this bone
+            const rotationTrackName = bone.name + '.quaternion';
+            const rotTrack = this.animationClip.tracks.find(track => track.name === rotationTrackName);
+
+            if (rotTrack) {
+                const constraintsFixed = this.applyRotationConstraints(rotTrack, constraints);
+                constraintsApplied += constraintsFixed;
+                if (constraintsFixed > 0) {
+                    console.log(`  Applied ${constraintsFixed} constraints to ${bone.name}`);
+                }
+            }
+        });
+
+        console.log(`🤖 Total conservative humanoid constraints applied: ${constraintsApplied}`);
+        return constraintsApplied;
+    }
+
+    constrainFingerRotations() {
+        // Legacy method for backwards compatibility
+        return 0; // Now handled by constrainUE5HumanoidRotations
+    }
+
+    applyRotationConstraints(track, constraints) {
+        let constraintsApplied = 0;
+        const quaternions = track.values;
+        const minRotationThreshold = Math.PI / 36; // 5 degrees in radians
+
+        // First pass: find the maximum rotation on each axis across all keyframes
+        let maxRotations = { x: 0, y: 0, z: 0 };
+
+        for (let i = 0; i < quaternions.length; i += 4) {
+            const quat = new THREE.Quaternion(
+                quaternions[i],
+                quaternions[i + 1],
+                quaternions[i + 2],
+                quaternions[i + 3]
+            );
+
+            const euler = new THREE.Euler().setFromQuaternion(quat, 'XYZ');
+            maxRotations.x = Math.max(maxRotations.x, Math.abs(euler.x));
+            maxRotations.y = Math.max(maxRotations.y, Math.abs(euler.y));
+            maxRotations.z = Math.max(maxRotations.z, Math.abs(euler.z));
+        }
+
+        // Second pass: ONLY modify keyframes that violate constraints
+        for (let i = 0; i < quaternions.length; i += 4) {
+            const quat = new THREE.Quaternion(
+                quaternions[i],     // x
+                quaternions[i + 1], // y
+                quaternions[i + 2], // z
+                quaternions[i + 3]  // w
+            );
+
+            // Convert to Euler angles for constraint checking
+            const euler = new THREE.Euler().setFromQuaternion(quat, 'XYZ');
+            let modified = false;
+
+            // Eliminate small rotations - if max rotation on an axis is less than 5 degrees, zero it out
+            if (maxRotations.x < minRotationThreshold) {
+                if (Math.abs(euler.x) > 0.001) { // Only modify if not already near zero
+                    euler.x = 0;
+                    modified = true;
+                }
+            }
+            if (maxRotations.y < minRotationThreshold) {
+                if (Math.abs(euler.y) > 0.001) { // Only modify if not already near zero
+                    euler.y = 0;
+                    modified = true;
+                }
+            }
+            if (maxRotations.z < minRotationThreshold) {
+                if (Math.abs(euler.z) > 0.001) { // Only modify if not already near zero
+                    euler.z = 0;
+                    modified = true;
+                }
+            }
+
+            // ONLY apply constraints to rotations that actually violate them
+            if (maxRotations.x >= minRotationThreshold) {
+                if (euler.x < constraints.x.min) {
+                    euler.x = constraints.x.min;
+                    modified = true;
+                } else if (euler.x > constraints.x.max) {
+                    euler.x = constraints.x.max;
+                    modified = true;
+                }
+            }
+
+            if (maxRotations.y >= minRotationThreshold) {
+                if (euler.y < constraints.y.min) {
+                    euler.y = constraints.y.min;
+                    modified = true;
+                } else if (euler.y > constraints.y.max) {
+                    euler.y = constraints.y.max;
+                    modified = true;
+                }
+            }
+
+            if (maxRotations.z >= minRotationThreshold) {
+                if (euler.z < constraints.z.min) {
+                    euler.z = constraints.z.min;
+                    modified = true;
+                } else if (euler.z > constraints.z.max) {
+                    euler.z = constraints.z.max;
+                    modified = true;
+                }
+            }
+
+            // ONLY convert back to quaternion if we actually modified something
+            if (modified) {
+                const constrainedQuat = new THREE.Quaternion().setFromEuler(euler);
+                quaternions[i] = constrainedQuat.x;
+                quaternions[i + 1] = constrainedQuat.y;
+                quaternions[i + 2] = constrainedQuat.z;
+                quaternions[i + 3] = constrainedQuat.w;
+                constraintsApplied++;
+            }
+        }
+
+        return constraintsApplied;
+    }
+
+
+
+
+
+
+
+    exportCleanedAnimation() {
         if (!this.animationClip || !this.bones.length) {
-            alert('No animation data to make loop');
+            alert('No animation data to export');
             return;
         }
 
-        console.log('🔄 Making animation loop seamlessly...');
+        console.log('📦 Exporting cleaned animation...');
         const status = document.getElementById('cleanupStatus');
-        status.textContent = 'Analyzing loop compatibility...';
+        status.textContent = 'Preparing export...';
 
-        // Store original animation if not already stored
-        if (!this.originalAnimation) {
-            this.storeOriginalAnimation();
-        }
+        // We need to use the FBXExporter, but since it's not easily available in browser,
+        // we'll export the animation data in a format that can be imported back into Blender/Maya
 
-        // Analyze the gap between first and last frames
-        const loopAnalysis = this.analyzeLoopGap();
+        // Create export data with current (cleaned/looped) animation state
+        const exportData = {
+            metadata: {
+                name: 'Cleaned Animation Export',
+                originalFile: this.loadedModel.name || 'Unknown',
+                duration: this.animationClip.duration,
+                frameRate: 30,
+                boneCount: this.bones.length,
+                exportDate: new Date().toISOString(),
+                modifications: [
+                    'Processed animation',
+                    'Ready for import into 3D software'
+                ]
+            },
+            bones: this.bones.map((bone, index) => ({
+                id: index,
+                name: bone.name || `Bone_${index}`,
+                parentId: bone.parent && this.bones.includes(bone.parent) ?
+                         this.bones.indexOf(bone.parent) : -1
+            })),
+            animation: {
+                tracks: this.animationClip.tracks.map(track => ({
+                    name: track.name,
+                    type: track.name.includes('.quaternion') ? 'rotation' :
+                          track.name.includes('.position') ? 'position' : 'unknown',
+                    times: [...track.times],
+                    values: [...track.values],
+                    interpolation: 'linear'
+                }))
+            }
+        };
 
-        status.textContent = `Found ${loopAnalysis.problematicBones.length} bones with loop gaps...`;
+        // Export as JSON (can be imported into Blender with custom script)
+        this.downloadJSON(exportData, 'cleaned_animation.json');
 
-        if (loopAnalysis.problematicBones.length === 0) {
-            status.textContent = '✅ Animation already loops perfectly!';
-            return;
-        }
+        status.textContent = '✅ Animation exported as JSON! Import into Blender/Maya with custom script.';
 
-        // Apply loop interpolation
-        const issuesFixed = this.interpolateLoopGaps(loopAnalysis);
-
-        // Enable reset button and update status
-        document.getElementById('resetOriginalBtn').disabled = false;
-        status.textContent = `✅ Loop interpolation complete! Fixed ${issuesFixed} bone gaps.`;
-
-        console.log(`🎉 Loop interpolation complete! Fixed ${issuesFixed} bone gaps.`);
-
-        // Refresh the animation to show changes
-        if (this.action) {
-            this.action.time = this.action.time; // Force refresh
-            this.mixer.update(0);
-        }
+        console.log('📦 Export complete! File contains cleaned animation data.');
+        console.log('💡 Use this JSON with a custom importer script in your 3D software.');
     }
 
-    analyzeLoopGap() {
-        const problematicBones = [];
-        const gapThreshold = 0.1; // Radians or units - threshold for considering a gap significant
-
-        this.animationClip.tracks.forEach(track => {
-            const times = track.times;
-            const values = track.values;
-            const valueSize = track.name.includes('.quaternion') ? 4 : 3;
-
-            if (times.length < 2) return;
-
-            // Compare first and last keyframes
-            const firstFrameIndex = 0;
-            const lastFrameIndex = times.length - 1;
-
-            let maxGap = 0;
-            for (let i = 0; i < valueSize; i++) {
-                const firstValue = values[firstFrameIndex * valueSize + i];
-                const lastValue = values[lastFrameIndex * valueSize + i];
-
-                // For quaternions, we need to handle the circular nature
-                let gap;
-                if (track.name.includes('.quaternion')) {
-                    // Quaternion difference calculation
-                    gap = Math.abs(firstValue - lastValue);
-                    // Handle quaternion double cover (q and -q represent same rotation)
-                    gap = Math.min(gap, Math.abs(gap - 2), Math.abs(gap + 2));
-                } else {
-                    gap = Math.abs(firstValue - lastValue);
-                }
-
-                maxGap = Math.max(maxGap, gap);
-            }
-
-            if (maxGap > gapThreshold) {
-                problematicBones.push({
-                    trackName: track.name,
-                    boneName: track.name.split('.')[0],
-                    gap: maxGap,
-                    track: track
-                });
-            }
-        });
-
-        console.log(`Found ${problematicBones.length} bones with significant loop gaps`);
-        return { problematicBones, gapThreshold };
+    downloadJSON(data, filename) {
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
     }
 
-    interpolateLoopGaps(loopAnalysis) {
-        let totalFixed = 0;
-        const { problematicBones } = loopAnalysis;
 
-        problematicBones.forEach(boneInfo => {
-            const track = boneInfo.track;
-            const times = track.times;
-            const values = track.values;
-            const valueSize = track.name.includes('.quaternion') ? 4 : 3;
 
-            if (times.length < 3) return; // Need at least 3 keyframes to interpolate
 
-            console.log(`Fixing loop gap for ${boneInfo.boneName} (gap: ${boneInfo.gap.toFixed(4)})`);
 
-            // STEP 1: Make the last frame identical to the first frame
-            const lastFrameIndex = times.length - 1;
-            for (let j = 0; j < valueSize; j++) {
-                const firstValue = values[0 * valueSize + j]; // First frame value
-                values[lastFrameIndex * valueSize + j] = firstValue; // Copy to last frame
-            }
 
-            // STEP 2: Smooth interpolation in the blend zone leading up to the last frame
-            const animationDuration = times[lastFrameIndex];
-            const blendDuration = Math.min(0.5, animationDuration * 0.15); // 15% of animation or 0.5s max
-            const blendStartTime = animationDuration - blendDuration;
 
-            console.log(`  Blending last ${blendDuration.toFixed(2)}s of ${animationDuration.toFixed(2)}s animation`);
 
-            // Find all frames in the blend zone (excluding the last frame which we already set)
-            for (let i = times.length - 2; i >= 0; i--) { // Start from second-to-last frame
-                const frameTime = times[i];
 
-                if (frameTime < blendStartTime) break; // Outside blend zone
 
-                // Calculate blend factor: 0.0 at blend start, 1.0 at end (approaching first frame values)
-                const blendFactor = (frameTime - blendStartTime) / blendDuration;
 
-                // Interpolate between original values and first frame values
-                for (let j = 0; j < valueSize; j++) {
-                    const originalValue = values[i * valueSize + j];
-                    const targetValue = values[0 * valueSize + j]; // First frame value
-
-                    // Use different interpolation for quaternions vs positions
-                    let interpolatedValue;
-                    if (track.name.includes('.quaternion')) {
-                        // For quaternions, ensure we take the shortest path (handle double cover)
-                        let diff = targetValue - originalValue;
-
-                        // Handle quaternion double cover - choose shorter path
-                        if (Math.abs(diff) > 1.0) {
-                            if (diff > 0) {
-                                diff = diff - 2.0;
-                            } else {
-                                diff = diff + 2.0;
-                            }
-                        }
-
-                        interpolatedValue = originalValue + (diff * blendFactor);
-                    } else {
-                        // Linear interpolation for positions
-                        interpolatedValue = originalValue + (targetValue - originalValue) * blendFactor;
-                    }
-
-                    values[i * valueSize + j] = interpolatedValue;
-                }
-            }
-
-            totalFixed++;
-        });
-
-        return totalFixed;
-    }
 
     getSmoothingParams(strength) {
         switch (strength) {
             case 'light':
                 return {
-                    detectionThreshold: 1.5, // Radians/second - how much change triggers smoothing
+                    detectionThreshold: 1.2, // Radians/second - how much change triggers smoothing
                     smoothingWindow: 3,      // Frames to average
-                    smoothingStrength: 0.3   // How much to apply smoothing
+                    smoothingStrength: 0.5   // How much to apply smoothing
                 };
             case 'medium':
                 return {
                     detectionThreshold: 1.0,
-                    smoothingWindow: 5,
-                    smoothingStrength: 0.5
+                    smoothingWindow: 4,
+                    smoothingStrength: 0.7
                 };
             case 'heavy':
                 return {
-                    detectionThreshold: 0.5,
-                    smoothingWindow: 7,
-                    smoothingStrength: 0.7
+                    detectionThreshold: 0.8,
+                    smoothingWindow: 5,
+                    smoothingStrength: 0.9
                 };
             default:
                 return this.getSmoothingParams('medium');
@@ -1316,9 +1542,250 @@ class ArmatureAnalyzer {
         document.getElementById('pauseBtn').disabled = true;
         document.getElementById('resetBtn').disabled = true;
         document.getElementById('timeSlider').disabled = true;
-        document.getElementById('cleanupBtn').disabled = true;
-        document.getElementById('makeLoopBtn').disabled = true;
-        document.getElementById('resetOriginalBtn').disabled = true;
+        document.getElementById('exportBtn').disabled = true;
+        document.getElementById('setBoneLockBtn').disabled = true;
+    }
+
+
+    populateSmoothBoneDropdown() {
+        const select = document.getElementById('smoothBoneSelect');
+        // Clear existing options except the first one
+        select.innerHTML = '<option value="">-- Select Bone --</option>';
+
+        // Add all bone names to the dropdown
+        this.bones.forEach(bone => {
+            const option = document.createElement('option');
+            option.value = bone.name;
+            option.textContent = bone.name;
+            select.appendChild(option);
+        });
+    }
+
+    addSmoothRule() {
+        const boneSelect = document.getElementById('smoothBoneSelect');
+        const startTimeInput = document.getElementById('startTime');
+        const endTimeInput = document.getElementById('endTime');
+        const intensitySelect = document.getElementById('smoothIntensity');
+
+        const boneName = boneSelect.value;
+        const startTime = parseFloat(startTimeInput.value);
+        const endTime = parseFloat(endTimeInput.value);
+        const intensity = intensitySelect.value;
+
+        // Validation
+        if (!boneName) {
+            alert('Please select a bone to smooth');
+            return;
+        }
+
+        if (isNaN(startTime) || isNaN(endTime)) {
+            alert('Please enter valid start and end times');
+            return;
+        }
+
+        if (startTime >= endTime) {
+            alert('End time must be greater than start time');
+            return;
+        }
+
+        if (this.animationClip && endTime > this.animationClip.duration) {
+            alert(`End time cannot exceed animation duration (${this.animationClip.duration.toFixed(2)}s)`);
+            return;
+        }
+
+        // Create smooth rule
+        const rule = {
+            id: Date.now(), // Simple unique ID
+            boneName: boneName,
+            startTime: startTime,
+            endTime: endTime,
+            intensity: intensity
+        };
+
+        // Add rule to array
+        this.smoothRules.push(rule);
+
+        // Update UI
+        this.updateSmoothRulesList();
+
+        // Reset form
+        boneSelect.value = '';
+        startTimeInput.value = '0';
+        endTimeInput.value = '1';
+
+        console.log(`Added smooth rule for ${boneName}: ${startTime}s - ${endTime}s (${intensity})`);
+    }
+
+    removeSmoothRule(ruleId) {
+        this.smoothRules = this.smoothRules.filter(rule => rule.id !== ruleId);
+        this.updateSmoothRulesList();
+        console.log(`Removed smooth rule: ${ruleId}`);
+    }
+
+    updateSmoothRulesList() {
+        const container = document.getElementById('smoothRulesList');
+
+        if (this.smoothRules.length === 0) {
+            container.innerHTML = '<span style="color: #888;">No smooth rules defined</span>';
+            return;
+        }
+
+        container.innerHTML = '';
+        this.smoothRules.forEach(rule => {
+            const item = document.createElement('div');
+            item.style.cssText = 'display: flex; justify-content: space-between; align-items: center; margin: 2px 0; padding: 3px 5px; background: #555; border-radius: 2px;';
+
+            const infoSpan = document.createElement('span');
+            infoSpan.innerHTML = `<span style="color: #4ecdc4; font-weight: bold;">${rule.boneName}</span>: ${rule.startTime}s - ${rule.endTime}s <span style="color: #feca57;">(${rule.intensity})</span>`;
+            infoSpan.style.fontSize = '11px';
+
+            const removeBtn = document.createElement('button');
+            removeBtn.textContent = '×';
+            removeBtn.style.cssText = 'background: #d63031; border: none; color: white; border-radius: 2px; padding: 1px 5px; cursor: pointer; font-size: 12px;';
+            removeBtn.onclick = () => this.removeSmoothRule(rule.id);
+
+            item.appendChild(infoSpan);
+            item.appendChild(removeBtn);
+            container.appendChild(item);
+        });
+    }
+
+    applySelectiveSmoothing() {
+        if (!this.animationClip || this.smoothRules.length === 0) {
+            return 0;
+        }
+
+        let totalSmoothingApplied = 0;
+        console.log(`🎯 Applying ${this.smoothRules.length} selective smoothing rules...`);
+
+        this.smoothRules.forEach(rule => {
+            const bone = this.bones.find(b => b.name === rule.boneName);
+            if (!bone) {
+                console.warn(`Bone ${rule.boneName} not found`);
+                return;
+            }
+
+            // Find rotation track for this bone
+            const rotationTrackName = bone.name + '.quaternion';
+            const rotTrack = this.animationClip.tracks.find(track => track.name === rotationTrackName);
+
+            if (rotTrack) {
+                const smoothingParams = this.getSmoothingParams(rule.intensity);
+                const smoothingApplied = this.smoothTrackDataInTimeRange(rotTrack, smoothingParams, rule.startTime, rule.endTime, 'rotation', rule.intensity);
+                totalSmoothingApplied += smoothingApplied;
+                console.log(`  Applied ${smoothingApplied} smoothing operations to ${rule.boneName} (${rule.startTime}s - ${rule.endTime}s)`);
+            }
+
+            // Also smooth position track if it exists
+            const positionTrackName = bone.name + '.position';
+            const posTrack = this.animationClip.tracks.find(track => track.name === positionTrackName);
+
+            if (posTrack) {
+                const posParams = this.getSmoothingParams(rule.intensity);
+                posParams.detectionThreshold *= 2; // Less sensitive for position
+                const smoothingApplied = this.smoothTrackDataInTimeRange(posTrack, posParams, rule.startTime, rule.endTime, 'position', rule.intensity);
+                totalSmoothingApplied += smoothingApplied;
+            }
+        });
+
+        console.log(`🎯 Total selective smoothing operations: ${totalSmoothingApplied}`);
+        return totalSmoothingApplied;
+    }
+
+    smoothTrackDataInTimeRange(track, params, startTime, endTime, type, intensity) {
+        const times = track.times;
+        const values = track.values;
+        const valueSize = type === 'rotation' ? 4 : 3; // quaternion vs vector3
+        let issuesFixed = 0;
+
+        // Find time indices that fall within our range
+        const startIndex = times.findIndex(time => time >= startTime);
+        const endIndex = times.findIndex(time => time > endTime);
+
+        const actualStartIndex = startIndex === -1 ? 0 : startIndex;
+        const actualEndIndex = endIndex === -1 ? times.length : endIndex;
+
+        if (actualStartIndex >= actualEndIndex) {
+            return 0; // No keyframes in this time range
+        }
+
+        console.log(`    Smoothing ${track.name} from index ${actualStartIndex} to ${actualEndIndex} (${times[actualStartIndex]?.toFixed(2)}s - ${times[actualEndIndex - 1]?.toFixed(2)}s) - Intensity: ${intensity}`);
+
+        // LOCK mode: Lock the bone by setting all values in range to the first value
+        if (intensity === 'lock') {
+            if (actualStartIndex < times.length) {
+                // Get the first value in the range as our "locked" value
+                const lockValueIndex = actualStartIndex * valueSize;
+                const lockValues = [];
+                for (let j = 0; j < valueSize; j++) {
+                    lockValues[j] = values[lockValueIndex + j];
+                }
+
+                // Set all keyframes in the range to this locked value
+                for (let i = actualStartIndex; i < actualEndIndex; i++) {
+                    const currValueIndex = i * valueSize;
+                    for (let j = 0; j < valueSize; j++) {
+                        values[currValueIndex + j] = lockValues[j];
+                    }
+                    issuesFixed++;
+                }
+
+                console.log(`    LOCK: Locked ${actualEndIndex - actualStartIndex} keyframes to constant value`);
+                return issuesFixed;
+            }
+        }
+
+        // Regular smoothing for light/medium/heavy intensities
+        for (let i = actualStartIndex + 1; i < actualEndIndex - 1; i++) {
+            const prevValueIndex = (i - 1) * valueSize;
+            const currValueIndex = i * valueSize;
+            const nextValueIndex = (i + 1) * valueSize;
+
+            let hasLargeChange = false;
+
+            // For heavy smoothing, reduce detection threshold to catch smaller changes
+            const detectionThreshold = intensity === 'heavy' ? params.detectionThreshold * 0.5 : params.detectionThreshold;
+
+            // Check for large changes on any axis
+            for (let j = 0; j < valueSize; j++) {
+                const prevVal = values[prevValueIndex + j];
+                const currVal = values[currValueIndex + j];
+                const nextVal = values[nextValueIndex + j];
+
+                // Calculate differences
+                const diff1 = Math.abs(currVal - prevVal);
+                const diff2 = Math.abs(nextVal - currVal);
+
+                // Detect jitter/spikes
+                if (diff1 > detectionThreshold || diff2 > detectionThreshold) {
+                    hasLargeChange = true;
+                    break;
+                }
+            }
+
+            // For medium and heavy, also apply smoothing even without large changes
+            const forceSmooth = intensity === 'heavy' || (intensity === 'medium' && Math.random() < 0.3);
+
+            // If large change detected or force smoothing, apply smoothing
+            if (hasLargeChange || forceSmooth) {
+                for (let j = 0; j < valueSize; j++) {
+                    const prevVal = values[prevValueIndex + j];
+                    const currVal = values[currValueIndex + j];
+                    const nextVal = values[nextValueIndex + j];
+
+                    // Apply smoothing with the specified strength
+                    const smoothedValue = prevVal * 0.25 + currVal * 0.5 + nextVal * 0.25;
+                    const originalValue = values[currValueIndex + j];
+
+                    // Blend between original and smoothed based on strength
+                    values[currValueIndex + j] = originalValue * (1 - params.smoothingStrength) +
+                                                smoothedValue * params.smoothingStrength;
+                }
+                issuesFixed++;
+            }
+        }
+
+        return issuesFixed;
     }
 
     showLoading(show) {
@@ -1334,6 +1801,8 @@ class ArmatureAnalyzer {
             this.mixer.update(delta);
 
             if (this.action) {
+
+                // Update UI
                 const timeSlider = document.getElementById('timeSlider');
                 timeSlider.value = this.action.time;
                 document.getElementById('timeDisplay').textContent = `${this.action.time.toFixed(2)}s`;
