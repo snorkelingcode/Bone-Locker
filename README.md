@@ -26,7 +26,8 @@ A web-based 3D tool for analyzing FBX skeletal meshes, viewing bone hierarchies,
 2. The model loads with a green skeleton visualization
 3. View bone data in the right sidebar (updates in real-time)
 4. Use animation controls to play/pause and scrub through frames
-5. Export animation data as JSON with frame-by-frame transforms
+5. Export animations
+6. Selective Bone Control - Modify the blend curves for certain bones, at your selected time frames.
 
 ## Requirements
 
