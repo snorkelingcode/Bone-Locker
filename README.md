@@ -7,11 +7,6 @@ A web-based 3D tool for analyzing FBX skeletal meshes, viewing bone hierarchies,
 **Method 1: Double-click `start.bat`**
 - This will automatically start the server and open your browser
 
-**Method 2: Manual start**
-1. Open command prompt in this folder
-2. Run: `python server.py`
-3. Open http://localhost:8000 in your browser
-
 ## Features
 
 - **FBX File Loading**: Upload and view FBX files with skeletal animations
