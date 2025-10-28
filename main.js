@@ -107,6 +107,31 @@ class ArmatureAnalyzer {
             console.log('FBX Scale:', fbx.scale);
             console.log('FBX Rotation:', fbx.rotation);
 
+            // Replace all materials immediately to prevent texture loading errors
+            console.log('Replacing materials with simple materials (no textures)...');
+            fbx.traverse((child) => {
+                if (!child) {
+                    console.warn('Encountered undefined child during material replacement');
+                    return;
+                }
+
+                if (child.isMesh || child.isSkinnedMesh) {
+                    try {
+                        // Create simple material that doesn't require textures
+                        child.material = new THREE.MeshStandardMaterial({
+                            color: 0x808080,
+                            roughness: 0.7,
+                            metalness: 0.3,
+                            side: THREE.DoubleSide,
+                            skinning: child.isSkinnedMesh
+                        });
+                        console.log(`Replaced material for: ${child.name || 'unnamed'}`);
+                    } catch (error) {
+                        console.error(`Error replacing material for ${child.name}:`, error);
+                    }
+                }
+            });
+
             this.clearScene();
 
 
@@ -221,6 +246,12 @@ class ArmatureAnalyzer {
         let meshCount = 0;
 
         fbx.traverse((child) => {
+            // Safety check for undefined children
+            if (!child) {
+                console.warn('Encountered undefined child in fixMeshMaterials');
+                return;
+            }
+
             // More comprehensive mesh detection
             const hasMeshGeometry = child.geometry && (
                 child.geometry.type === 'BufferGeometry' ||
@@ -257,30 +288,39 @@ class ArmatureAnalyzer {
                 if (!child.isMesh && !child.isSkinnedMesh && hasMeshGeometry) {
                     console.log('  Converting to proper Mesh object...');
 
-                    // Create a new proper mesh with the geometry
-                    const newMesh = child.skeleton ?
-                        new THREE.SkinnedMesh(child.geometry, child.material) :
-                        new THREE.Mesh(child.geometry, child.material);
+                    try {
+                        // Validate child has required properties
+                        if (!child.geometry) {
+                            console.warn('  Child missing geometry, skipping conversion');
+                            return;
+                        }
 
-                    // Copy transform
-                    newMesh.position.copy(child.position);
-                    newMesh.rotation.copy(child.rotation);
-                    newMesh.scale.copy(child.scale);
-                    newMesh.name = child.name + '_converted';
+                        // Create a new proper mesh with the geometry
+                        const newMesh = child.skeleton ?
+                            new THREE.SkinnedMesh(child.geometry, child.material) :
+                            new THREE.Mesh(child.geometry, child.material);
 
-                    // Copy skeleton if it exists
-                    if (child.skeleton) {
-                        newMesh.bind(child.skeleton);
+                        // Copy transform
+                        newMesh.position.copy(child.position);
+                        newMesh.rotation.copy(child.rotation);
+                        newMesh.scale.copy(child.scale);
+                        newMesh.name = child.name + '_converted';
+
+                        // Copy skeleton if it exists
+                        if (child.skeleton) {
+                            newMesh.bind(child.skeleton);
+                        }
+
+                        // Replace the child in the parent
+                        if (child.parent) {
+                            const parent = child.parent;
+                            parent.add(newMesh);
+                            parent.remove(child);
+                            console.log('  Replaced mesh in parent hierarchy');
+                        }
+                    } catch (conversionError) {
+                        console.error('  Error converting mesh:', conversionError);
                     }
-
-                    // Replace the child in the parent
-                    if (child.parent) {
-                        child.parent.add(newMesh);
-                        child.parent.remove(child);
-                    }
-
-                    // Update reference for material application
-                    child = newMesh;
                 }
 
                 // Ensure mesh is visible
@@ -288,25 +328,18 @@ class ArmatureAnalyzer {
                 child.castShadow = true;
                 child.receiveShadow = true;
 
-                // Create a bright, highly visible material for debugging
-                const debugMaterial = new THREE.MeshPhongMaterial({
-                    color: 0xff0066,  // Bright magenta
+                // Create a simple GLB-compatible material (no textures needed)
+                // Using MeshStandardMaterial for GLTFExporter compatibility
+                const simpleMaterial = new THREE.MeshStandardMaterial({
+                    color: 0x808080,  // Gray
+                    roughness: 0.7,
+                    metalness: 0.3,
                     side: THREE.DoubleSide,
-                    wireframe: false,
-                    transparent: false,
-                    opacity: 1.0
+                    skinning: child.isSkinnedMesh  // Enable skinning for animated meshes
                 });
 
-                // Also create a wireframe version
-                const wireframeMaterial = new THREE.MeshBasicMaterial({
-                    color: 0x00ff00,  // Bright green
-                    wireframe: true,
-                    transparent: false,
-                    opacity: 1.0
-                });
-
-                // Apply the debug material
-                child.material = debugMaterial;
+                // Apply the simple material immediately to prevent texture loading
+                child.material = simpleMaterial;
 
                 console.log('  Applied debug material');
             }
@@ -1366,43 +1399,154 @@ class ArmatureAnalyzer {
             // Create a scene with just our model for export
             const exportScene = new THREE.Scene();
 
-            // Clone the model to avoid modifying the original
-            const modelClone = this.loadedModel.clone(true); // Deep clone including geometry/materials
+            console.log('=== EXPORT DIAGNOSTICS ===');
+            console.log('Original model:', this.loadedModel);
 
-            // Ensure the cloned model has the current animation state and include animation
-            if (this.mixer && this.animationClip) {
-                // Add the animation clip to the cloned model
-                if (!modelClone.animations) {
-                    modelClone.animations = [];
+            // IMPORTANT: Don't clone! Export the original model directly to preserve bone references
+            // We'll update the animations array directly and restore it after export
+            const originalAnimations = this.loadedModel.animations;
+
+            // Set the cleaned animation
+            if (this.animationClip) {
+                this.loadedModel.animations = [this.animationClip];
+                console.log('Set cleaned animation for export');
+            }
+
+            // Ensure all materials are GLB-compatible
+            console.log('Ensuring GLB-compatible materials...');
+            const originalMaterials = new Map();
+
+            this.loadedModel.traverse((child) => {
+                if (!child) {
+                    console.warn('Encountered undefined child during material check');
+                    return;
                 }
 
-                // Clone the animation clip and add it
-                const clonedClip = this.animationClip.clone();
-                modelClone.animations.push(clonedClip);
+                if (child.isMesh || child.isSkinnedMesh) {
+                    const oldMaterial = child.material;
 
-                // Create new mixer for the cloned model to apply current pose
-                const clonedMixer = new THREE.AnimationMixer(modelClone);
-                const clonedAction = clonedMixer.clipAction(clonedClip);
+                    // Save original material to restore later
+                    originalMaterials.set(child, oldMaterial);
 
-                // Set to current time and update once to apply the pose
-                clonedAction.time = this.action ? this.action.time : 0;
-                clonedAction.enabled = true;
-                clonedMixer.update(0);
+                    // Only convert if not already MeshStandardMaterial or MeshBasicMaterial
+                    if (oldMaterial &&
+                        oldMaterial.type !== 'MeshStandardMaterial' &&
+                        oldMaterial.type !== 'MeshBasicMaterial') {
+
+                        console.log(`Converting material for ${child.name}: ${oldMaterial.type} -> MeshStandardMaterial`);
+
+                        child.material = new THREE.MeshStandardMaterial({
+                            color: oldMaterial.color || 0x808080,
+                            roughness: 0.7,
+                            metalness: 0.3,
+                            side: THREE.DoubleSide,
+                            skinning: child.isSkinnedMesh
+                        });
+                    } else {
+                        console.log(`Material OK for ${child.name}: ${oldMaterial?.type || 'none'}`);
+                    }
+                }
+            });
+
+            // Analyze what's in the model
+            let skinnedMeshCount = 0;
+            let meshCount = 0;
+            let boneCount = 0;
+            let skeletonInfo = [];
+
+            this.loadedModel.traverse((child) => {
+                if (child.isSkinnedMesh) {
+                    skinnedMeshCount++;
+                    console.log(`SkinnedMesh found: ${child.name}`);
+                    console.log('  - Has geometry:', !!child.geometry);
+                    console.log('  - Has material:', !!child.material);
+                    console.log('  - Has skeleton:', !!child.skeleton);
+
+                    if (child.skeleton) {
+                        console.log('  - Skeleton bones:', child.skeleton.bones.length);
+                        console.log('  - Skeleton boneInverses:', child.skeleton.boneInverses.length);
+                        skeletonInfo.push({
+                            mesh: child.name,
+                            boneCount: child.skeleton.bones.length,
+                            bones: child.skeleton.bones.map(b => b.name)
+                        });
+                    }
+                } else if (child.isMesh) {
+                    meshCount++;
+                    console.log(`Regular Mesh found: ${child.name}`);
+                } else if (child.isBone) {
+                    boneCount++;
+                }
+            });
+
+            console.log('\n=== MODEL STRUCTURE SUMMARY ===');
+            console.log('SkinnedMeshes:', skinnedMeshCount);
+            console.log('Regular Meshes:', meshCount);
+            console.log('Bones:', boneCount);
+            console.log('Skeleton Info:', JSON.stringify(skeletonInfo, null, 2));
+
+            // Log animation data
+            if (this.animationClip) {
+                console.log('\n=== ANIMATION DATA ===');
+                console.log('Animation name:', this.animationClip.name);
+                console.log('Animation duration:', this.animationClip.duration);
+                console.log('Animation tracks:', this.animationClip.tracks.length);
+                console.log('Track details:');
+                this.animationClip.tracks.forEach((track, i) => {
+                    console.log(`  Track ${i}: ${track.name} (${track.ValueTypeName}, ${track.times.length} keyframes)`);
+                });
             }
 
             // Add the model to export scene
-            exportScene.add(modelClone);
+            exportScene.add(this.loadedModel);
+
+            console.log('\n=== EXPORT SCENE ===');
+            console.log('Export scene children:', exportScene.children.length);
+            console.log('Export scene animations:', this.loadedModel.animations ? this.loadedModel.animations.length : 0);
 
             // Export with animation
             const exportOptions = {
                 binary: true,
-                animations: modelClone.animations || [this.animationClip]
+                animations: this.loadedModel.animations || []
             };
+
+            console.log('Export options:', exportOptions);
+            console.log('Starting GLTFExporter.parse...\n');
 
             exporter.parse(
                 exportScene,
                 (gltfData) => {
                     // Success callback
+                    console.log('\n=== GLB EXPORT SUCCESS ===');
+                    console.log('GLB data type:', gltfData.constructor.name);
+                    console.log('GLB data size:', gltfData.byteLength, 'bytes');
+                    console.log('GLB data size (KB):', (gltfData.byteLength / 1024).toFixed(2), 'KB');
+
+                    // Check if data looks valid (GLB header should start with 'glTF')
+                    const headerView = new DataView(gltfData);
+                    const magic = headerView.getUint32(0, true);
+                    const version = headerView.getUint32(4, true);
+                    const length = headerView.getUint32(8, true);
+
+                    console.log('GLB Header:');
+                    console.log('  Magic:', magic === 0x46546C67 ? '✓ Valid (glTF)' : '✗ Invalid');
+                    console.log('  Version:', version);
+                    console.log('  Length:', length);
+
+                    if (gltfData.byteLength === 0) {
+                        console.error('❌ GLB data is empty!');
+                        alert('Export failed: GLB data is empty');
+                        return;
+                    }
+
+                    // Parse and display the internal GLB structure
+                    console.log('\n=== DETAILED GLB STRUCTURE ===');
+                    const gltfJson = this.parseGLBStructure(gltfData);
+                    if (gltfJson) {
+                        console.log('\nFull GLTF JSON (for detailed inspection):');
+                        console.log(JSON.stringify(gltfJson, null, 2));
+                    }
+
                     const blob = new Blob([gltfData], { type: 'application/octet-stream' });
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
@@ -1413,8 +1557,28 @@ class ArmatureAnalyzer {
                     document.body.removeChild(a);
                     URL.revokeObjectURL(url);
 
+                    // Restore original state
+                    console.log('\n=== RESTORING ORIGINAL STATE ===');
+
+                    // Restore model to original scene
+                    this.scene.add(this.loadedModel);
+
+                    // Restore original animations
+                    this.loadedModel.animations = originalAnimations;
+                    console.log('Restored original animations');
+
+                    // Restore original materials
+                    originalMaterials.forEach((material, child) => {
+                        child.material = material;
+                    });
+                    console.log('Restored original materials');
+
                     status.textContent = '✅ GLB exported successfully! Import into Blender and save as FBX.';
                     console.log('📦 GLB export complete! File downloaded with updated animation data.');
+                    console.log('\nTo diagnose in Blender:');
+                    console.log('1. Open Blender');
+                    console.log('2. File > Import > glTF 2.0 (.glb/.gltf)');
+                    console.log('3. Check the System Console (Window > Toggle System Console) for errors');
 
                     alert(
                         'GLB file exported successfully!\n\n' +
@@ -1426,9 +1590,21 @@ class ArmatureAnalyzer {
                 },
                 (error) => {
                     // Error callback
-                    console.error('GLB Export error:', error);
+                    console.error('\n=== GLB EXPORT ERROR ===');
+                    console.error('Error message:', error.message);
+                    console.error('Error stack:', error.stack);
+                    console.error('Full error object:', error);
+
+                    // Restore original state even on error
+                    console.log('\n=== RESTORING ORIGINAL STATE (after error) ===');
+                    this.scene.add(this.loadedModel);
+                    this.loadedModel.animations = originalAnimations;
+                    originalMaterials.forEach((material, child) => {
+                        child.material = material;
+                    });
+
                     status.textContent = `❌ GLB export failed: ${error.message}`;
-                    alert(`GLB export failed: ${error.message}`);
+                    alert(`GLB export failed: ${error.message}\n\nCheck browser console for details.`);
                 },
                 exportOptions
             );
@@ -1437,6 +1613,73 @@ class ArmatureAnalyzer {
             console.error('Export error:', error);
             status.textContent = `❌ Export failed: ${error.message}`;
             alert(`Export failed: ${error.message}`);
+        }
+    }
+
+    // Helper function to parse and display GLB structure for debugging
+    parseGLBStructure(glbArrayBuffer) {
+        try {
+            const dataView = new DataView(glbArrayBuffer);
+
+            // Read GLB header
+            const magic = dataView.getUint32(0, true);
+            const version = dataView.getUint32(4, true);
+            const length = dataView.getUint32(8, true);
+
+            console.log('GLB File Structure:');
+            console.log('  Magic:', magic.toString(16), magic === 0x46546C67 ? '(valid glTF)' : '(INVALID!)');
+            console.log('  Version:', version);
+            console.log('  Total Length:', length);
+
+            // Read first chunk (JSON)
+            const chunk0Length = dataView.getUint32(12, true);
+            const chunk0Type = dataView.getUint32(16, true);
+
+            console.log('\nChunk 0 (JSON):');
+            console.log('  Length:', chunk0Length);
+            console.log('  Type:', chunk0Type === 0x4E4F534A ? 'JSON' : 'Unknown');
+
+            // Extract and parse JSON
+            const jsonBytes = new Uint8Array(glbArrayBuffer, 20, chunk0Length);
+            const jsonString = new TextDecoder().decode(jsonBytes);
+            const gltfJson = JSON.parse(jsonString);
+
+            console.log('\nGLTF JSON Structure:');
+            console.log('  Asset version:', gltfJson.asset?.version);
+            console.log('  Scenes:', gltfJson.scenes?.length || 0);
+            console.log('  Nodes:', gltfJson.nodes?.length || 0);
+            console.log('  Meshes:', gltfJson.meshes?.length || 0);
+            console.log('  Materials:', gltfJson.materials?.length || 0);
+            console.log('  Skins:', gltfJson.skins?.length || 0);
+            console.log('  Animations:', gltfJson.animations?.length || 0);
+            console.log('  Accessors:', gltfJson.accessors?.length || 0);
+            console.log('  BufferViews:', gltfJson.bufferViews?.length || 0);
+            console.log('  Buffers:', gltfJson.buffers?.length || 0);
+
+            if (gltfJson.animations && gltfJson.animations.length > 0) {
+                console.log('\nAnimation Details:');
+                gltfJson.animations.forEach((anim, i) => {
+                    console.log(`  Animation ${i}: ${anim.name || 'unnamed'}`);
+                    console.log(`    Channels: ${anim.channels?.length || 0}`);
+                    console.log(`    Samplers: ${anim.samplers?.length || 0}`);
+                });
+            }
+
+            if (gltfJson.skins && gltfJson.skins.length > 0) {
+                console.log('\nSkin Details:');
+                gltfJson.skins.forEach((skin, i) => {
+                    console.log(`  Skin ${i}: ${skin.name || 'unnamed'}`);
+                    console.log(`    Joints: ${skin.joints?.length || 0}`);
+                    console.log(`    Skeleton root: ${skin.skeleton ?? 'none'}`);
+                });
+            }
+
+            // Return the parsed JSON for further inspection
+            return gltfJson;
+
+        } catch (error) {
+            console.error('Error parsing GLB structure:', error);
+            return null;
         }
     }
 
