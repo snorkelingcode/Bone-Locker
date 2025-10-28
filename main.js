@@ -1368,27 +1368,14 @@ class ArmatureAnalyzer {
 
 
     exportCleanedAnimation() {
-        console.log('🔧 NEW exportCleanedAnimation method called - NOT JSON export!');
+        console.log('🔧 Exporting cleaned animation as GLB...');
 
         if (!this.animationClip || !this.bones.length || !this.loadedModel) {
             alert('No animation data to export');
             return;
         }
 
-        // Show user that FBX isn't available but offer GLB alternative
-        const userChoice = confirm(
-            'FBX export is not available in browser environments.\n\n' +
-            'THREE.js does not include an FBXExporter.\n\n' +
-            'Would you like to export as GLB instead?\n' +
-            '(GLB files can be imported into Blender, Maya, and other 3D software, then converted to FBX)'
-        );
-
-        if (!userChoice) {
-            document.getElementById('cleanupStatus').textContent = 'Export cancelled by user.';
-            return;
-        }
-
-        console.log('📦 Exporting cleaned animation as GLB...');
+        console.log('📦 Starting GLB export...');
         const status = document.getElementById('cleanupStatus');
         status.textContent = 'Preparing GLB export...';
 
@@ -1573,20 +1560,9 @@ class ArmatureAnalyzer {
                     });
                     console.log('Restored original materials');
 
-                    status.textContent = '✅ GLB exported successfully! Import into Blender and save as FBX.';
-                    console.log('📦 GLB export complete! File downloaded with updated animation data.');
-                    console.log('\nTo diagnose in Blender:');
-                    console.log('1. Open Blender');
-                    console.log('2. File > Import > glTF 2.0 (.glb/.gltf)');
-                    console.log('3. Check the System Console (Window > Toggle System Console) for errors');
-
-                    alert(
-                        'GLB file exported successfully!\n\n' +
-                        'To convert to FBX:\n' +
-                        '1. Import the .glb file into Blender\n' +
-                        '2. File > Export > FBX (.fbx)\n' +
-                        '3. Make sure "Animation" is checked in export options'
-                    );
+                    status.textContent = '✅ GLB exported successfully with cleaned animation data!';
+                    console.log('📦 GLB export complete! File downloaded with cleaned animation data.');
+                    console.log('✓ File can be imported into Blender, Maya, Unity, Unreal Engine, etc.');
                 },
                 (error) => {
                     // Error callback
