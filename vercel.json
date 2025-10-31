@@ -1,0 +1,14 @@
+{
+  "buildCommand": null,
+  "installCommand": null,
+  "devCommand": null,
+  "framework": null,
+  "outputDirectory": ".",
+  "public": true,
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
